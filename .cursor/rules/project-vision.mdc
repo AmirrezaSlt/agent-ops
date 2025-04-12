@@ -1,0 +1,21 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+# Project vision
+
+We’re building the control platform for AI agents.
+
+A place to create, manage, and deploy stateless agents with:
+- Scoped data access
+- Reusable templates
+- Full lifecycle control
+The platform:
+- Proxies and routes chats
+- Logs all interactions
+- Provides a state endpoint for agents to load context on demand
+- Includes object storage for agents to search, reference, and ground their responses
+
+

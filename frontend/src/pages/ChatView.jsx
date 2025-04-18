@@ -2,67 +2,134 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
-  Grid,
   TextField,
   Button,
   Typography,
-  Paper,
   Divider,
   IconButton,
-  AppBar,
-  Toolbar
+  Container,
+  Paper
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import MessageItem from '../components/chat/MessageItem';
-import ConversationList from '../components/ConversationList';
+import MessageContainer from '../components/chat/MessageContainer';
 import useChatMessages from '../hooks/useChatMessages';
 import useAgentStore from '../store/agentStore';
+import { sendChatRequest, parseStream } from '../api/endpoints/chatApi';
 
 /**
- * Page component for the chat view with conversation history
+ * Simplified chat view component using parsed message streams
  */
 function ChatView() {
-  const { conversationId } = useParams();
+  const { conversationId, agentId } = useParams();
   const navigate = useNavigate();
   const chatContainerRef = useRef(null);
   
-  // Get agent info from store
-  const { currentAgent } = useAgentStore();
+  // State for messages and input
+  const [userInput, setUserInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [messages, setMessages] = useState([]);
   
-  // Use our custom hook for chat state management, passing the conversation ID if available
-  const {
-    userInput,
-    setUserInput,
-    isSending,
-    isTyping,
-    messageHistory,
-    sendMessage,
-    cancelRequest,
-    clearMessages,
-    conversationId: activeConversationId,
-    loading
-  } = useChatMessages(conversationId);
-
-  // Update URL when conversation ID changes
+  // Get agent info from store
+  const { currentAgent, fetchAgents, agents, setCurrentChatAgent } = useAgentStore(state => ({
+    currentAgent: state.currentChatAgent,
+    fetchAgents: state.fetchAgents,
+    agents: state.agents,
+    setCurrentChatAgent: state.setCurrentChatAgent
+  }));
+  
+  // Set current agent from URL parameter if available
   useEffect(() => {
-    if (activeConversationId && activeConversationId !== conversationId) {
-      navigate(`/chat/${activeConversationId}`, { replace: true });
+    if (agentId && (!currentAgent || currentAgent.id.toString() !== agentId)) {
+      // Fetch agents if they aren't already loaded
+      if (agents.length === 0) {
+        fetchAgents().then(() => {
+          const agent = agents.find(a => a.id.toString() === agentId);
+          if (agent) {
+            setCurrentChatAgent(agent);
+          }
+        });
+      } else {
+        // If agents are already loaded, just set the current agent
+        const agent = agents.find(a => a.id.toString() === agentId);
+        if (agent) {
+          setCurrentChatAgent(agent);
+        }
+      }
     }
-  }, [activeConversationId, conversationId, navigate]);
+  }, [agentId, agents, currentAgent, fetchAgents, setCurrentChatAgent]);
+  
+  // Fetch agents on component mount
+  useEffect(() => {
+    fetchAgents();
+  }, [fetchAgents]);
   
   // Scroll to bottom when messages change
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
-  }, [messageHistory]);
+  }, [messages]);
   
-  // Key down handler for Enter key
+  // Clear messages
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+  }, []);
+  
+  // Send a message
+  const sendMessage = useCallback(async () => {
+    if (!userInput.trim() || isSending) {
+      return;
+    }
+    
+    try {
+      // Set sending state
+      setIsSending(true);
+      
+      // Add user message to the chat
+      const userMessage = {
+        type: 'user',
+        content: userInput,
+        timestamp: new Date().toISOString()
+      };
+      
+      setMessages(prev => [...prev, userMessage]);
+      
+      // Clear input field
+      setUserInput('');
+      
+      // Create abort controller
+      const abortController = new AbortController();
+      
+      // Send request
+      const response = await sendChatRequest(
+        userInput, 
+        [], // We're not using message history for simplicity 
+        abortController, 
+        conversationId
+      );
+      
+      // Parse the stream response
+      parseStream(response, (updatedMessages) => {
+        // This callback will be called each time the stream updates
+        setMessages(prev => {
+          // Keep all user messages and add the updated parsed messages
+          const userMessages = prev.filter(m => m.type === 'user');
+          return [...userMessages, ...updatedMessages];
+        });
+      });
+      
+    } catch (error) {
+      console.error('Error sending message:', error);
+    } finally {
+      setIsSending(false);
+    }
+  }, [userInput, isSending, conversationId]);
+  
+  // Handle key press for Enter
   const handleKeyDown = useCallback((e) => {
-    // Send message on Enter without Shift key
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault(); // Prevent default to avoid newline
       sendMessage();
@@ -75,156 +142,131 @@ function ChatView() {
     sendMessage();
   }, [sendMessage]);
   
-  // Clear chat history
+  // Handle clearing chat
   const handleClearChat = useCallback(() => {
-    clearMessages();
+    if (window.confirm('Are you sure you want to clear this chat?')) {
+      clearMessages();
+      setUserInput('');
+    }
   }, [clearMessages]);
-
-  // Handle selecting a conversation from the list
-  const handleSelectConversation = (selectedConversationId) => {
-    navigate(`/chat/${selectedConversationId}`);
-  };
-
-  // Handle starting a new conversation
-  const handleNewConversation = () => {
-    clearMessages();
-    navigate('/chat');
-  };
   
-  // Handle going back to the home page
+  // Handle going back
   const handleGoHome = () => {
     navigate('/');
   };
   
-  // Sort messages by sequence number if available, or by index as fallback
-  const sortedMessages = React.useMemo(() => {
-    return [...messageHistory].sort((a, b) => {
-      // If both have sequence numbers, sort by them
-      if (a.sequence !== undefined && b.sequence !== undefined) {
-        return a.sequence - b.sequence;
-      }
-      // If only one has a sequence number, prioritize it
-      if (a.sequence !== undefined) return -1;
-      if (b.sequence !== undefined) return 1;
-      
-      // Otherwise, maintain original order
-      return 0;
-    });
-  }, [messageHistory]);
-  
   return (
-    <Box sx={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column' }}>
-      <AppBar position="static" color="primary">
-        <Toolbar>
+    <Container maxWidth="xl" sx={{ height: 'calc(100vh - 64px)', py: 2 }}>
+      <Paper elevation={2} sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Chat Header */}
+        <Box sx={{ 
+          p: 2, 
+          display: 'flex', 
+          alignItems: 'center', 
+          borderBottom: 1, 
+          borderColor: 'divider',
+          bgcolor: 'background.paper'
+        }}>
           <IconButton
             edge="start"
-            color="inherit"
             onClick={handleGoHome}
             aria-label="home"
+            sx={{ mr: 1 }}
           >
             <ArrowBackIcon />
           </IconButton>
-          <Typography variant="h6" sx={{ ml: 2, flex: 1 }}>
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>
             {currentAgent ? `Chat with ${currentAgent.name}` : 'Chat'}
           </Typography>
-          
           <Button 
-            color="inherit" 
+            variant="outlined"
+            color="error" 
+            size="small"
             startIcon={<DeleteIcon />}
             onClick={handleClearChat}
-            disabled={messageHistory.length === 0 || isSending}
+            disabled={messages.length === 0 || isSending}
+            sx={{ ml: 1 }}
           >
-            Clear Chat
+            Clear
           </Button>
-        </Toolbar>
-      </AppBar>
-      
-      <Box sx={{ flexGrow: 1, overflow: 'hidden' }}>
-        <Grid container sx={{ height: '100%' }}>
-          {/* Conversation List - Left Sidebar */}
-          <Grid item xs={12} md={3} sx={{ height: '100%', borderRight: 1, borderColor: 'divider' }}>
-            <ConversationList 
-              onSelectConversation={handleSelectConversation}
-              onNewConversation={handleNewConversation}
-            />
-          </Grid>
-          
-          {/* Chat Area - Right Side */}
-          <Grid item xs={12} md={9} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            {/* Messages Area */}
-            <Box 
-              ref={chatContainerRef} 
-              sx={{ 
-                flexGrow: 1, 
-                overflowY: 'auto', 
-                display: 'flex', 
-                flexDirection: 'column',
-                p: 2,
-                gap: 2
-              }}
-            >
-              {sortedMessages.length === 0 ? (
-                <Box sx={{ textAlign: 'center', p: 4, color: 'text.secondary' }}>
-                  <Typography>
-                    {conversationId && loading ? 'Loading conversation...' : 'Start a new conversation.'}
-                  </Typography>
-                </Box>
-              ) : (
-                sortedMessages.map((message, index) => (
-                  <MessageItem 
-                    key={message.messageId || index} 
-                    message={message} 
-                    index={index} 
-                    messages={sortedMessages} 
-                  />
-                ))
+        </Box>
+        
+        {/* Messages Area */}
+        <Box 
+          ref={chatContainerRef} 
+          sx={{ 
+            flexGrow: 1, 
+            overflowY: 'auto', 
+            display: 'flex', 
+            flexDirection: 'column',
+            p: 3,
+            gap: 2,
+            bgcolor: 'grey.50'
+          }}
+        >
+          {messages.length === 0 ? (
+            <Box sx={{ textAlign: 'center', p: 4, color: 'text.secondary' }}>
+              <Typography>
+                Start a new conversation.
+              </Typography>
+              {!currentAgent && (
+                <Typography variant="body2" sx={{ mt: 2 }}>
+                  No agent selected. Return to the agent list to select an agent.
+                </Typography>
               )}
             </Box>
-            
-            <Divider />
-            
-            {/* Input Area */}
-            <Box sx={{ p: 2 }}>
-              <form onSubmit={handleFormSubmit} style={{ width: '100%', display: 'flex', alignItems: 'flex-end' }}>
-                <TextField
-                  value={userInput}
-                  onChange={(e) => setUserInput(e.target.value)}
-                  multiline
-                  maxRows={4}
-                  fullWidth
-                  placeholder="Type your message here..."
-                  variant="outlined"
-                  disabled={isSending}
-                  sx={{ mr: 2 }}
-                  onKeyDown={handleKeyDown}
-                />
-                
-                {isSending ? (
-                  <Button
-                    variant="contained"
-                    color="secondary"
-                    onClick={cancelRequest}
-                    startIcon={<StopIcon />}
-                  >
-                    Stop
-                  </Button>
-                ) : (
-                  <Button
-                    type="submit"
-                    variant="contained"
-                    color="primary"
-                    endIcon={<SendIcon />}
-                    disabled={!userInput.trim() || isSending}
-                  >
-                    Send
-                  </Button>
-                )}
-              </form>
-            </Box>
-          </Grid>
-        </Grid>
-      </Box>
-    </Box>
+          ) : (
+            messages.map((message, index) => (
+              <MessageContainer 
+                key={index} 
+                message={message}
+              />
+            ))
+          )}
+        </Box>
+        
+        <Divider />
+        
+        {/* Input Area */}
+        <Box sx={{ p: 2, bgcolor: 'background.paper' }}>
+          <form onSubmit={handleFormSubmit} style={{ width: '100%', display: 'flex', alignItems: 'flex-end' }}>
+            <TextField
+              value={userInput}
+              onChange={(e) => setUserInput(e.target.value)}
+              multiline
+              maxRows={4}
+              fullWidth
+              placeholder="Type your message here..."
+              variant="outlined"
+              disabled={isSending || !currentAgent}
+              sx={{ mr: 2 }}
+              onKeyDown={handleKeyDown}
+              autoFocus
+            />
+            {isSending ? (
+              <Button
+                variant="contained"
+                color="secondary"
+                onClick={() => {/* TODO: Cancel request */}}
+                startIcon={<StopIcon />}
+              >
+                Stop
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                variant="contained"
+                color="primary"
+                endIcon={<SendIcon />}
+                disabled={!userInput.trim() || isSending || !currentAgent}
+              >
+                Send
+              </Button>
+            )}
+          </form>
+        </Box>
+      </Paper>
+    </Container>
   );
 }
 

@@ -1,17 +1,34 @@
 import React from 'react';
+import { Box, Paper, Typography, Avatar } from '@mui/material';
 
 const UserMessage = ({ message }) => {
   return (
-    <div className="flex items-start p-4 justify-end mb-2">
-      <div className="flex-grow-0 max-w-3/4 p-3 bg-green-100 rounded-lg">
-        <div className="whitespace-pre-wrap">{message.content}</div>
-      </div>
-      <div className="flex-shrink-0 ml-4">
-        <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white">
-          U
-        </div>
-      </div>
-    </div>
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', p: 2, mb: 1, justifyContent: 'flex-end' }}>
+      <Paper 
+        elevation={0} 
+        sx={{ 
+          p: 1.5, 
+          maxWidth: '75%',
+          bgcolor: 'success.light',
+          borderRadius: 2
+        }}
+      >
+        <Typography sx={{ whiteSpace: 'pre-wrap' }}>
+          {message.content}
+        </Typography>
+      </Paper>
+      <Avatar 
+        sx={{ 
+          width: 32, 
+          height: 32, 
+          bgcolor: 'success.main', 
+          ml: 2, 
+          fontSize: '0.875rem'
+        }}
+      >
+        U
+      </Avatar>
+    </Box>
   );
 };
 

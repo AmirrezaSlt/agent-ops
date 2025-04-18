@@ -13,19 +13,24 @@ export const parseToolOutput = (content) => {
     output: '',
     error: '',
     hasError: false,
-    displayContent: content,
+    displayContent: content || '',
     isValidResponse: false
   };
+  
+  // If content is empty or undefined, return early
+  if (!content) {
+    return result;
+  }
   
   // Check if content contains tool_output tags
   if (content.includes('<tool_output>')) {
     // Use a greedy regex pattern to capture everything between the tags
-    const responsePattern = /<tool_output>([\s\S]*)<\/tool_output>/;
+    const responsePattern = /<tool_output>([\s\S]*?)<\/tool_output>/;
     const match = content.match(responsePattern);
     
     if (match) {
       let parsedContent = match[1].trim();
-      result.displayContent = parsedContent;
+      result.displayContent = parsedContent || content;
       
       try {
         // Try to parse as JSON
@@ -50,15 +55,25 @@ export const parseToolOutput = (content) => {
           result.displayContent = responseObject.error;
         }
         // Ensure we always keep some content
-        else if (result.displayContent === "") {
-          result.displayContent = parsedContent;
+        else {
+          // If no parseable output or error, use the original JSON string
+          result.output = parsedContent;
+          result.displayContent = parsedContent || content;
         }
       } catch (e) {
         // If parsing fails, just use the content between tags
         console.error('Failed to parse tool_output JSON:', e);
-        result.displayContent = parsedContent;
+        result.output = parsedContent;
+        result.displayContent = parsedContent || content;
       }
+    } else {
+      // No match found between tags, use the whole content
+      result.displayContent = content;
     }
+  } else {
+    // No tool_output tags, use the content as is
+    result.output = content;
+    result.displayContent = content;
   }
   
   return result;

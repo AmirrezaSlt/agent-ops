@@ -293,59 +293,147 @@ export const processToolOutput = (message, messages) => {
  * @returns {Array} - The updated messages array
  */
 export const updateMessagesWithToolOutputs = (messages) => {
-  const updatedMessages = [];
-  let lastToolIndex = -1;
-  
-  for (let i = 0; i < messages.length; i++) {
-    const message = { ...messages[i] };
-    
-    // Process the message based on type
-    if (message.type === 'assistant' || message.role === 'assistant') {
-      // Record the index if this is a tool message
-      if (message.hasTool || message.hasToolCall) {
-        lastToolIndex = updatedMessages.length;
-      }
-      
-      const processedMessage = processMessage(message);
-      updatedMessages.push(processedMessage);
-    } 
-    else if (message.type === 'function_result' || message.type === 'tool_output') {
-      // Process tool response and potentially merge with preceding tool call
-      const processedResponse = processToolOutput(message, updatedMessages);
-      if (processedResponse) {
-        updatedMessages.push(processedResponse);
-      }
-    }
-    else {
-      updatedMessages.push(message);
-    }
+  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    return [];
   }
   
-  // Special case: if there's an assistant message right after a tool/tool response,
-  // ensure it shows up as a separate message (not merged with previous tools)
-  for (let i = 0; i < updatedMessages.length; i++) {
-    const message = updatedMessages[i];
+  // Start by processing any tool output tags in message content
+  const processedMessages = messages.map(message => {
+    // Skip if not a message or already processed
+    if (!message.content || message.hasBeenProcessed) {
+      return message;
+    }
     
-    if (i > 0 && 
-        (message.type === 'assistant' || message.role === 'assistant') &&
-        !message.hasTool && !message.hasToolCall && !message.isThinking) {
-        
-      const prevMessage = updatedMessages[i-1];
+    // Process thinking content
+    const thinkingInfo = extractThinkingContent(message.content);
+    if (thinkingInfo.hasThinking) {
+      return {
+        ...message,
+        isThinking: true,
+        content: thinkingInfo.thinkingContent,
+        textContent: thinkingInfo.textContent,
+        hasBeenProcessed: true
+      };
+    }
+    
+    // Process tool calls
+    const toolInfo = extractToolInfo(message.content);
+    if (toolInfo.hasToolCall) {
+      // Check if there's also an error
+      let toolError = null;
+      let hasToolErrorFlag = false;
       
-      // If previous message is a tool or has had a tool response added to it,
-      // make sure this message isn't treated as part of it
-      if (prevMessage.hasTool || prevMessage.hasToolCall || 
-          prevMessage.hasToolOutput || prevMessage.type === 'function_result') {
-        
-        // Ensure this is treated as a separate message
-        if (!message.postToolContent) {
-          message.postToolContent = true;
+      if (hasToolError(message.content)) {
+        const errorInfo = parseToolError(message.content);
+        if (errorInfo.hasError) {
+          toolError = errorInfo.error;
+          hasToolErrorFlag = true;
         }
       }
+      
+      return {
+        ...message,
+        ...toolInfo,
+        ...(hasToolErrorFlag ? { 
+          toolError,
+          hasToolError: true 
+        } : {}),
+        hasTool: true,
+        hasBeenProcessed: true
+      };
+    }
+    
+    // Process tool outputs
+    const toolOutputInfo = extractToolOutputContent(message.content);
+    if (toolOutputInfo.hasToolOutput) {
+      return {
+        ...message,
+        toolOutput: toolOutputInfo.outputContent,
+        textContent: toolOutputInfo.textContent,
+        hasToolOutput: true,
+        hasBeenProcessed: true
+      };
+    }
+    
+    return message;
+  });
+  
+  // Second pass - link tool calls with their outputs
+  const toolCalls = processedMessages.filter(m => 
+    m.hasTool || m.type === 'function_call' || m.hasToolCall || m.isTool
+  );
+  
+  const toolOutputs = processedMessages.filter(m => 
+    m.hasToolOutput || m.type === 'function_result' || m.type === 'tool_output' || m.isToolOutput
+  );
+  
+  // Map of tool call message IDs to their matched tool output
+  const toolOutputMap = {};
+  
+  // Try to link by parentToolId first
+  toolOutputs.forEach(output => {
+    if (output.parentToolId) {
+      toolOutputMap[output.parentToolId] = output;
+    }
+  });
+  
+  // Then try linking by sequence proximity
+  toolCalls.forEach(toolCall => {
+    // Skip if already has an output linked
+    if (toolOutputMap[toolCall.messageId]) return;
+    
+    if (toolCall.sequence !== undefined) {
+      // Find output with closest higher sequence
+      const possibleOutputs = toolOutputs
+        .filter(output => 
+          output.sequence !== undefined && 
+          output.sequence > toolCall.sequence &&
+          output.sequence < Math.ceil(toolCall.sequence) + 1 &&
+          !Object.values(toolOutputMap).includes(output)
+        )
+        .sort((a, b) => a.sequence - b.sequence);
+      
+      if (possibleOutputs.length > 0) {
+        toolOutputMap[toolCall.messageId] = possibleOutputs[0];
+      }
+    }
+  });
+  
+  // Finally, try matching any remaining unlinked outputs to tool calls by order
+  const linkedOutputIds = new Set(Object.values(toolOutputMap).map(output => output.messageId));
+  const remainingOutputs = toolOutputs.filter(output => !linkedOutputIds.has(output.messageId));
+  
+  if (remainingOutputs.length > 0 && toolCalls.length > 0) {
+    for (const toolCall of toolCalls) {
+      if (!toolOutputMap[toolCall.messageId] && remainingOutputs.length > 0) {
+        toolOutputMap[toolCall.messageId] = remainingOutputs.shift();
+      }
     }
   }
   
-  return updatedMessages;
+  // Create a final result with tool outputs embedded
+  return processedMessages.map(message => {
+    // If it's a tool call, attach the corresponding output
+    if ((message.hasTool || message.type === 'function_call') && message.messageId && toolOutputMap[message.messageId]) {
+      return {
+        ...message,
+        toolOutput: toolOutputMap[message.messageId].content || toolOutputMap[message.messageId].toolOutput,
+        linkedOutputId: toolOutputMap[message.messageId].messageId
+      };
+    }
+    
+    // If it's a tool output that's already linked, mark it
+    if ((message.hasToolOutput || message.type === 'function_result' || message.type === 'tool_output') && 
+        message.messageId && 
+        Object.values(toolOutputMap).some(output => output.messageId === message.messageId)) {
+      return {
+        ...message,
+        isLinkedToolOutput: true
+      };
+    }
+    
+    return message;
+  });
 };
 
 /**
@@ -369,4 +457,44 @@ export const cleanContent = (content) => {
     .replace(/<\/answer/g, '')      // Remove incomplete answer closing tags
     .replace(/<answer>/g, '')       // Remove answer opening tags
     .trim();
+};
+
+/**
+ * Extracts tool output content from message content
+ * @param {string} content - The message content to parse
+ * @returns {Object} - Tool output information or empty object if no tool output found
+ */
+export const extractToolOutputContent = (content) => {
+  if (!content) return { hasToolOutput: false, outputContent: '', textContent: '' };
+  
+  // Check for tool output tags - handle both complete and incomplete tags
+  const outputPatterns = [
+    /<tool_output>([\s\S]*?)<\/tool_output>/,   // Complete tag
+    /<tool_output>([\s\S]*?)<\/tool_output/,    // Incomplete closing tag
+    /<tool_output>([\s\S]*)/                    // Only opening tag
+  ];
+  
+  // Try each pattern in order
+  let match = null;
+  for (const pattern of outputPatterns) {
+    match = content.match(pattern);
+    if (match) break;
+  }
+  
+  if (!match) return { hasToolOutput: false, outputContent: '', textContent: content };
+  
+  // Extract output content and remaining text
+  const outputContent = match[1].trim();
+  
+  // Remove the entire matched section for textContent
+  let textContent = content.replace(match[0], '').trim();
+  
+  // Also clean any stray tags from the text content
+  textContent = cleanTagsFromContent(textContent);
+  
+  return {
+    hasToolOutput: true,
+    outputContent,
+    textContent
+  };
 }; 

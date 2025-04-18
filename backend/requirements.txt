@@ -7,3 +7,4 @@ gunicorn==21.2.0
 whitenoise==6.6.0
 minio==7.2.0
 httpx==0.28.1
+coverage==7.4.4

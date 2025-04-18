@@ -44,23 +44,39 @@ const useConversationStore = create((set, get) => ({
   },
 
   // Update the conversations list with a new conversation
-  updateConversationsList: (conversation) => {
-    const { conversations } = get();
-    // Check if conversation already exists in the list
-    const exists = conversations.some(c => c.id === conversation.id);
-    
-    if (exists) {
-      // Update existing conversation
-      set({
-        conversations: conversations.map(c => 
-          c.id === conversation.id ? conversation : c
-        )
-      });
-    } else {
-      // Add new conversation to the list
-      set({
-        conversations: [conversation, ...conversations]
-      });
+  updateConversationsList: async () => {
+    try {
+      // Make a specific API call to get the updated conversation
+      if (get().currentConversation?.id) {
+        const conversationId = get().currentConversation.id;
+        const refreshedConversation = await getConversation(conversationId);
+        
+        if (refreshedConversation) {
+          const { conversations } = get();
+          // Check if conversation already exists in the list
+          const exists = conversations.some(c => c.id === refreshedConversation.id);
+          
+          if (exists) {
+            // Update existing conversation
+            set({
+              conversations: conversations.map(c => 
+                c.id === refreshedConversation.id ? refreshedConversation : c
+              )
+            });
+          } else {
+            // Add new conversation to the list
+            set({
+              conversations: [refreshedConversation, ...conversations]
+            });
+          }
+        }
+      } else {
+        // If no current conversation, refresh the list
+        await get().fetchConversations();
+      }
+    } catch (error) {
+      console.error('Error updating conversations list:', error);
+      // Don't set error state to avoid UI disruption
     }
   },
 

@@ -1,14 +1,12 @@
+version: '3.8'
+
 services:
   db:
     image: postgres:16-alpine
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data/
     environment:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_USER=postgres
-      - POSTGRES_DB=agentops
-    ports:
-      - "5432:5432"
+      - POSTGRES_DB=agentops_test
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -17,11 +15,6 @@ services:
 
   minio:
     image: minio/minio:latest
-    volumes:
-      - ./data/minio:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     environment:
       - MINIO_ROOT_USER=minio
       - MINIO_ROOT_PASSWORD=minio123
@@ -40,52 +33,35 @@ services:
     entrypoint: >
       /bin/sh -c "
       /usr/bin/mc config host add myminio http://minio:9000 minio minio123;
-      /usr/bin/mc mb myminio/public-bucket;
-      /usr/bin/mc policy set public myminio/public-bucket;
+      /usr/bin/mc mb myminio/test-bucket;
+      /usr/bin/mc policy set public myminio/test-bucket;
       exit 0;
       "
 
-  backend:
+  backend-test:
     build:
       context: ./backend
       dockerfile: Dockerfile
     volumes:
       - ./backend:/app
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/agentops
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/agentops_test
       - DEBUG=True
-      - SECRET_KEY=django-insecure-key-for-dev-only
+      - SECRET_KEY=django-insecure-key-for-testing
       - ALLOWED_HOSTS=localhost,127.0.0.1
       - BASE_PATH=/agent-ops
       - MINIO_ENDPOINT=minio
       - MINIO_PORT=9000
       - MINIO_ACCESS_KEY=minio
       - MINIO_SECRET_KEY=minio123
-      - MINIO_BUCKET=public-bucket
+      - MINIO_BUCKET=test-bucket
       - MINIO_USE_SSL=False
+      - DJANGO_SETTINGS_MODULE=agentops.settings
     depends_on:
       db:
         condition: service_healthy
       minio:
         condition: service_healthy
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - VITE_API_BASE_URL=http://localhost:9080/agent-ops/api
-    command: npm run dev
-
-  nginx:
-    image: nginx:1.25.3-alpine
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
-    ports:
-      - "9080:80"
-    depends_on:
-      - backend
-      - frontend
+      minio-setup:
+        condition: service_completed_successfully
+    command: bash /app/run_tests.sh 

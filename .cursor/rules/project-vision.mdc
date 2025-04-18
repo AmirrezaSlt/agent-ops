@@ -6,16 +6,93 @@ alwaysApply: false
 
 # Project vision
 
-We’re building the control platform for AI agents.
+AI Agent Control Platform — Vision Document
+Overview
+We’re building a unified control platform for managing AI agents as stateless, deployable applications. The platform enables users to create, launch, stop, and interact with agents — while managing communication flow, container lifecycle, and conversation history.
 
-A place to create, manage, and deploy stateless agents with:
-- Scoped data access
-- Reusable templates
-- Full lifecycle control
-The platform:
-- Proxies and routes chats
-- Logs all interactions
-- Provides a state endpoint for agents to load context on demand
-- Includes object storage for agents to search, reference, and ground their responses
+Agents are deployed in Docker containers and operate independently, while the platform acts as the control plane for routing messages, storing conversation data, and optionally managing state.
 
+Core Concepts
+Agents as Stateless Apps
+Agents are treated as independent, stateless containers.
+
+The platform proxies all chats to the appropriate agent and logs interactions.
+
+Agents can optionally retrieve state from the platform using a conversation ID.
+
+Key Features (MVP)
+1. Agent Lifecycle Management
+List all agents in a dashboard
+
+Launch and stop agents via Docker containers
+
+Health check via a simple /healthz endpoint exposed by the agent
+
+2. Agent Creation
+Two modes when creating an agent:
+
+Externally hosted: User provides the endpoint of an already-running agent
+
+Internally deployed: User supplies metadata, and the platform generates a Dockerfile, builds the image, and handles deployment
+
+Metadata fields for Dockerfile generation (e.g. base image, command, dependencies) will be defined separately
+
+3. Chat Routing & Communication
+All user messages are routed through the platform to the correct agent
+
+The platform acts as a proxy, managing communication and request formatting
+
+Agents remain stateless, but can fetch conversation history via:
+GET /state?conversation_id=xyz
+
+4. Conversation Management
+The platform logs all messages between users and agents in a database
+
+Agents can optionally use this data to load or manage their own memory/state
+
+5. Chat Interface (Initial Version)
+A simple, clean interface per agent for user interaction
+
+Each message includes:
+
+Thought process (optional)
+
+Tool use (optional)
+
+Final answer (required)
+
+UI will evolve based on agent behavior and memory integration in the future
+
+Technical Architecture Summary
+Platform Runtime: Docker + Docker Compose
+
+Agent Deployment: Containers launched/stopped by the platform via Docker
+
+Templates: Agents defined using user-supplied metadata → converted into Dockerfiles
+
+Chat Routing: Platform proxies all user-agent communications
+
+Health Checks: Agents expose a basic /healthz endpoint
+
+State Retrieval: Agents use a REST endpoint to optionally load past messages
+
+Database: Stores all chat interactions per conversation
+
+Deferred / Future Features
+These are out of scope for the initial release but earmarked for future development:
+
+User authentication and role-based permissions
+
+Memory management (summaries, embeddings, RAG)
+
+Agent templates with UI abstraction
+
+Multi-agent coordination
+
+Analytics and usage reporting
+
+File/object storage for agent reference
+
+Vision Summary
+A lightweight but powerful control platform for deploying, managing, and interacting with stateless AI agents. It handles routing, logging, and lifecycle management — making it easy to build, chat with, and scale intelligent agents from a single interface.
 

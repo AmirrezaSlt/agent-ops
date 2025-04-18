@@ -1,27 +1,121 @@
-import React, { useState } from 'react';
-import { CustomCollapse } from './MessageItem';
+import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Paper,
+  Typography,
+  Avatar,
+  IconButton,
+  Collapse,
+  Divider,
+  Chip
+} from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import CodeIcon from '@mui/icons-material/Code';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import BuildIcon from '@mui/icons-material/Build';
 import { parseToolError } from '../../utils/toolUtils';
 
 /**
  * Component for displaying tool calls
  */
-const ToolMessage = ({ message }) => {
-  // UI state - set to false for collapsed by default
+const ToolMessage = ({ message, toolOutputMessage }) => {
+  // UI state - all sections collapsed by default
+  const [expanded, setExpanded] = useState(false);
   const [inputsExpanded, setInputsExpanded] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState(false);
   const [errorExpanded, setErrorExpanded] = useState(false);
-  const [expanded, setExpanded] = useState(true);
+  const [parsedToolArgs, setParsedToolArgs] = useState({});
 
   // UI toggle handlers
   const toggleExpanded = () => setExpanded(!expanded);
-  const toggleInputs = () => setInputsExpanded(!inputsExpanded);
-  const toggleOutput = () => setOutputExpanded(!outputExpanded);
-  const toggleError = () => setErrorExpanded(!errorExpanded);
+  const toggleInputs = (e) => {
+    e.stopPropagation();
+    setInputsExpanded(!inputsExpanded);
+  };
+  const toggleOutput = (e) => {
+    e.stopPropagation();
+    setOutputExpanded(!outputExpanded);
+  };
+  const toggleError = (e) => {
+    e.stopPropagation();
+    setErrorExpanded(!errorExpanded);
+  };
 
   // Extract data from message
   const toolName = message.toolName || message.jsonContent?.name || 'Tool Call';
   const toolArgs = message.args || message.jsonContent?.args || message.toolArgs || {};
-  const toolOutput = message.toolOutput || message.toolResponse || '';
+  
+  // Extract tool output from either the provided toolOutputMessage or from the message itself
+  let toolOutput = message.toolOutput || message.toolResponse || '';
+  if (toolOutputMessage) {
+    // Handle both direct content and nested content
+    if (toolOutputMessage.content) {
+      if (typeof toolOutputMessage.content === 'string') {
+        // If it's a string, check if it has a tool_output tag
+        if (toolOutputMessage.content.includes('<tool_output>')) {
+          // Extract content between tool_output tags
+          const match = toolOutputMessage.content.match(/<tool_output>(.*?)<\/tool_output>/s);
+          if (match && match[1]) {
+            toolOutput = match[1].trim();
+          } else {
+            toolOutput = toolOutputMessage.content.replace(/<\/?tool_output>/g, '').trim();
+          }
+        } else {
+          // Use the content directly
+          toolOutput = toolOutputMessage.content;
+        }
+      } else if (typeof toolOutputMessage.content === 'object') {
+        // If it's an object, stringify it
+        toolOutput = JSON.stringify(toolOutputMessage.content, null, 2);
+      }
+    } else if (toolOutputMessage.isVirtualToolOutput) {
+      // Handle virtual tool outputs created by the MessageItem component
+      toolOutput = toolOutputMessage.content;
+    }
+  }
+  
+  // If we have output, ensure the output section is highlighted even when collapsed
+  const hasOutput = toolOutput && toolOutput.trim().length > 0;
+  
+  // Timestamp if available
+  const timestamp = message.timestamp || message.created_at || 
+                    (toolOutputMessage && (toolOutputMessage.timestamp || toolOutputMessage.created_at));
+                    
+  // Indicate whether this tool and its output are properly linked
+  const isProperlyLinked = toolOutputMessage && (
+    toolOutputMessage.parentToolId === message.messageId || 
+    toolOutputMessage.sequence && message.sequence && 
+    (toolOutputMessage.sequence > message.sequence && toolOutputMessage.sequence < message.sequence + 1)
+  );
+  
+  // Parse tool args on mount or when message changes
+  useEffect(() => {
+    // Try to extract tool arguments from content if not directly available
+    if (message.content && (typeof toolArgs !== 'object' || Object.keys(toolArgs).length === 0)) {
+      try {
+        // Check if content includes JSON
+        if (message.content.includes('{') && message.content.includes('}')) {
+          // Look for JSON within <tool> tags or directly
+          const jsonMatch = message.content.match(/<tool>(.*?)<\/tool>/s) || 
+                           message.content.match(/{.*}/s);
+          
+          if (jsonMatch && jsonMatch[1]) {
+            const parsed = JSON.parse(jsonMatch[1]);
+            if (parsed.args) {
+              setParsedToolArgs(parsed.args);
+            } else if (typeof parsed === 'object') {
+              setParsedToolArgs(parsed);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing tool args from content:', e);
+      }
+    } else {
+      setParsedToolArgs(toolArgs);
+    }
+  }, [message, toolArgs]);
   
   // Check for errors
   let toolError = message.toolError || '';
@@ -36,127 +130,277 @@ const ToolMessage = ({ message }) => {
     }
   }
   
+  // Check for errors in tool output
+  if (!hasError && toolOutput) {
+    if (typeof toolOutput === 'string' && toolOutput.toLowerCase().includes('error')) {
+      hasError = true;
+      toolError = toolOutput;
+    }
+  }
+  
   // Format tool inputs for display
   const renderToolInputs = () => {
-    if (!toolArgs || Object.keys(toolArgs).length === 0) {
-      return <div className="text-gray-400 italic">No inputs</div>;
+    const argsToRender = Object.keys(parsedToolArgs).length > 0 ? parsedToolArgs : toolArgs;
+    
+    if (!argsToRender || Object.keys(argsToRender).length === 0) {
+      return <Typography color="text.secondary" sx={{ fontStyle: 'italic' }}>No inputs</Typography>;
     }
     
-    return Object.entries(toolArgs).map(([key, value]) => (
-      <div key={key} className="mb-1">
-        <span className="font-semibold">{key}:</span>{' '}
-        <span className="whitespace-pre-wrap">{typeof value === 'object' ? JSON.stringify(value, null, 2) : value}</span>
-      </div>
+    return Object.entries(argsToRender).map(([key, value]) => (
+      <Box key={key} sx={{ mb: 1 }}>
+        <Typography variant="subtitle2" component="span" sx={{ fontWeight: 'bold' }}>
+          {key}:
+        </Typography>{' '}
+        <Typography
+          component="span"
+          variant="body2"
+          sx={{
+            fontFamily: 'monospace',
+            whiteSpace: 'pre-wrap',
+            bgcolor: 'background.paper',
+            p: 0.5,
+            borderRadius: 1
+          }}
+        >
+          {typeof value === 'object' ? JSON.stringify(value, null, 2) : value}
+        </Typography>
+      </Box>
     ));
   };
 
   return (
-    <div className="flex items-start p-4 bg-gray-100 rounded-lg mb-2">
-      <div className="flex-shrink-0 mr-4">
-        <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white">
-          AI
-        </div>
-      </div>
-      <div className="flex-grow">
-        {/* Tool Call Box */}
-        <div className="p-3 mb-2 bg-gray-200 rounded-lg border-l-4 border-blue-500">
-          {/* Tool Header showing tool name prominently */}
-          <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-300">
-            <div className="font-bold text-blue-700 flex items-center">
-              <button 
-                onClick={toggleExpanded}
-                className="text-gray-600 hover:text-gray-800 w-6 h-6 mr-2 flex items-center justify-center rounded hover:bg-gray-300"
-              >
-                {expanded ? '▼' : '►'}
-              </button>
-              <span className="mr-2">🔧</span>
+    <Box sx={{ display: 'flex', alignItems: 'flex-start', p: 2, mb: 1.5 }}>
+      <Avatar 
+        sx={{ 
+          width: 32, 
+          height: 32, 
+          bgcolor: 'primary.main', 
+          mr: 2, 
+          fontSize: '0.875rem'
+        }}
+      >
+        AI
+      </Avatar>
+      <Box sx={{ flexGrow: 1 }}>
+        <Paper
+          elevation={1}
+          sx={{
+            bgcolor: 'grey.100',
+            borderRadius: 2,
+            borderLeft: '4px solid',
+            borderColor: 'info.main'
+          }}
+        >
+          {/* Tool Header */}
+          <Box
+            onClick={toggleExpanded}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              p: 1.5,
+              cursor: 'pointer',
+              borderTopLeftRadius: 2,
+              borderTopRightRadius: 2,
+              bgcolor: 'grey.200'
+            }}
+          >
+            <IconButton
+              size="small"
+              onClick={toggleExpanded}
+              aria-expanded={expanded}
+              aria-label={expanded ? 'collapse tool' : 'expand tool'}
+            >
+              {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </IconButton>
+            <BuildIcon sx={{ color: 'info.main', mr: 1 }} />
+            <Typography variant="subtitle1" sx={{ fontWeight: 'bold', color: 'info.main' }}>
               {toolName}
-            </div>
-          </div>
-          
-          {expanded && (
-            <>
-              {/* Tool Inputs Section */}
-              <div className="mb-3">
-                <div className="flex items-center mb-2 p-2 bg-gray-300 rounded cursor-pointer" onClick={toggleInputs}>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleInputs();
-                    }}
-                    className="text-gray-600 hover:text-gray-800 w-6 h-6 mr-2 flex items-center justify-center rounded hover:bg-gray-200"
-                  >
-                    {inputsExpanded ? '▼' : '►'}
-                  </button>
-                  <div className="font-semibold text-gray-700">Inputs</div>
-                </div>
-                
-                <CustomCollapse in={inputsExpanded}>
-                  <div className="p-2 bg-gray-100 rounded border border-gray-300 text-sm">
-                    {renderToolInputs()}
-                  </div>
-                </CustomCollapse>
-              </div>
+            </Typography>
+            {hasOutput && !expanded && (
+              <Chip 
+                size="small" 
+                label="Output Available" 
+                color="success" 
+                variant="outlined" 
+                sx={{ ml: 1, height: 20 }} 
+              />
+            )}
+            <Box sx={{ flexGrow: 1 }} />
+          </Box>
+
+          <Collapse in={expanded}>
+            <Divider />
+            
+            {/* Inputs Section */}
+            <Box sx={{ p: 1.5 }}>
+              <Box
+                onClick={toggleInputs}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  p: 1,
+                  cursor: 'pointer',
+                  bgcolor: 'grey.200',
+                  borderRadius: 1,
+                  mb: inputsExpanded ? 1 : 0
+                }}
+              >
+                <IconButton size="small" onClick={toggleInputs}>
+                  {inputsExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+                <Typography variant="subtitle2">Inputs</Typography>
+              </Box>
               
-              {/* Tool Output Section */}
-              {toolOutput && (
-                <div className="mb-3">
-                  <div className="flex items-center mb-2 p-2 bg-gray-300 rounded cursor-pointer" onClick={toggleOutput}>
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleOutput();
+              <Collapse in={inputsExpanded}>
+                <Box sx={{ p: 1, bgcolor: 'background.paper', borderRadius: 1 }}>
+                  {renderToolInputs()}
+                </Box>
+              </Collapse>
+            </Box>
+            
+            {/* Output Section */}
+            <Box sx={{ p: 1.5, pt: 0 }}>
+              <Box
+                onClick={toggleOutput}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  p: 1,
+                  cursor: 'pointer',
+                  bgcolor: hasOutput ? 'success.light' : 'grey.200',
+                  borderRadius: 1,
+                  mb: outputExpanded ? 1 : 0
+                }}
+              >
+                <IconButton size="small" onClick={toggleOutput}>
+                  {outputExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+                <Typography variant="subtitle2" color={hasOutput ? 'success.dark' : 'inherit'}>
+                  Output
+                </Typography>
+                {hasOutput && (
+                  <Chip 
+                    size="small" 
+                    label={isProperlyLinked ? "Linked" : "Available"} 
+                    color={isProperlyLinked ? "success" : "primary"} 
+                    variant="outlined" 
+                    sx={{ ml: 1, height: 20 }} 
+                  />
+                )}
+              </Box>
+              
+              <Collapse in={outputExpanded}>
+                <Box 
+                  sx={{ 
+                    p: 1, 
+                    bgcolor: 'background.paper', 
+                    borderRadius: 1,
+                    maxHeight: 300,
+                    overflow: 'auto',
+                    border: hasOutput ? '1px solid' : 'none',
+                    borderColor: 'success.light'
+                  }}
+                >
+                  {toolOutput ? (
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        fontFamily: 'monospace',
+                        whiteSpace: 'pre-wrap'
                       }}
-                      className="text-gray-600 hover:text-gray-800 w-6 h-6 mr-2 flex items-center justify-center rounded hover:bg-gray-200"
                     >
-                      {outputExpanded ? '▼' : '►'}
-                    </button>
-                    <div className="font-semibold text-gray-700">Output</div>
-                  </div>
-                  
-                  <CustomCollapse in={outputExpanded}>
-                    <div className="p-2 bg-gray-100 rounded border border-gray-300 text-sm whitespace-pre-wrap max-h-[400px] overflow-y-auto">
                       {toolOutput}
-                    </div>
-                  </CustomCollapse>
-                </div>
-              )}
-              
-              {/* Tool Error Section */}
-              {hasError && toolError && (
-                <div>
-                  <div className="flex items-center mb-2 p-2 bg-red-200 rounded cursor-pointer" onClick={toggleError}>
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleError();
+                    </Typography>
+                  ) : (
+                    <Typography color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                      No output available
+                    </Typography>
+                  )}
+                </Box>
+              </Collapse>
+            </Box>
+            
+            {/* Error Section */}
+            {hasError && toolError && (
+              <Box sx={{ p: 1.5, pt: 0 }}>
+                <Box
+                  onClick={toggleError}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    p: 1,
+                    cursor: 'pointer',
+                    bgcolor: 'error.light',
+                    borderRadius: 1,
+                    mb: errorExpanded ? 1 : 0
+                  }}
+                >
+                  <IconButton size="small" onClick={toggleError}>
+                    {errorExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                  </IconButton>
+                  <ErrorOutlineIcon sx={{ mr: 1, color: 'error.main' }} />
+                  <Typography variant="subtitle2" color="error.main">Error</Typography>
+                </Box>
+                
+                <Collapse in={errorExpanded}>
+                  <Box 
+                    sx={{ 
+                      p: 1, 
+                      bgcolor: 'error.lighter', 
+                      borderRadius: 1,
+                      border: '1px solid',
+                      borderColor: 'error.light'
+                    }}
+                  >
+                    <Typography
+                      variant="body2"
+                      color="error.main"
+                      sx={{
+                        fontFamily: 'monospace',
+                        whiteSpace: 'pre-wrap'
                       }}
-                      className="text-gray-600 hover:text-gray-800 w-6 h-6 mr-2 flex items-center justify-center rounded hover:bg-red-100"
                     >
-                      {errorExpanded ? '▼' : '►'}
-                    </button>
-                    <div className="font-semibold text-red-700">Error</div>
-                  </div>
-                  
-                  <CustomCollapse in={errorExpanded}>
-                    <div className="p-2 bg-red-50 rounded border border-red-300 text-sm whitespace-pre-wrap text-red-800 max-h-[400px] overflow-y-auto">
                       {toolError}
-                    </div>
-                  </CustomCollapse>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+                    </Typography>
+                  </Box>
+                </Collapse>
+              </Box>
+            )}
+          </Collapse>
+        </Paper>
+        
+        {/* Message Timestamp */}
+        {timestamp && (
+          <Typography 
+            variant="caption" 
+            sx={{ 
+              display: 'block', 
+              color: 'text.secondary', 
+              mt: 0.5, 
+              textAlign: 'right',
+              pr: 1
+            }}
+          >
+            {new Date(timestamp).toLocaleTimeString()}
+          </Typography>
+        )}
         
         {/* Text after tool call */}
         {message.textContent && (
-          <div className="p-3 bg-blue-100 rounded-lg mt-2">
-            <div className="whitespace-pre-wrap">{message.textContent}</div>
-          </div>
+          <Paper
+            elevation={0}
+            sx={{
+              p: 1.5,
+              mt: 1,
+              bgcolor: 'primary.50',
+              borderRadius: 2
+            }}
+          >
+            <Typography sx={{ whiteSpace: 'pre-wrap' }}>{message.textContent}</Typography>
+          </Paper>
         )}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 };
 

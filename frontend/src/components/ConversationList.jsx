@@ -11,7 +11,8 @@ import {
   Divider,
   CircularProgress,
   IconButton,
-  Tooltip
+  Tooltip,
+  Button
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ChatIcon from '@mui/icons-material/Chat';
@@ -106,10 +107,27 @@ function ConversationList({ onSelectConversation, onNewConversation }) {
       ) : error ? (
         <Box sx={{ p: 3, textAlign: 'center', flexGrow: 1 }}>
           <Typography color="error">{error}</Typography>
+          <Button
+            sx={{ mt: 2 }}
+            variant="outlined"
+            size="small"
+            onClick={() => fetchConversations()}
+          >
+            Retry
+          </Button>
         </Box>
       ) : conversations.length === 0 ? (
         <Box sx={{ p: 3, textAlign: 'center', flexGrow: 1 }}>
           <Typography>No conversations yet. Start chatting to create one!</Typography>
+          <Button
+            sx={{ mt: 2 }}
+            variant="contained" 
+            color="primary"
+            startIcon={<AddIcon />}
+            onClick={handleNewConversation}
+          >
+            New Conversation
+          </Button>
         </Box>
       ) : (
         <List sx={{ flexGrow: 1, overflow: 'auto' }}>

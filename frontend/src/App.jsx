@@ -12,6 +12,8 @@ function App() {
         <Routes>
           <Route path="/" element={<AgentList />} />
           <Route path="/chat" element={<ChatView />} />
+          <Route path="/chat/agent/:agentId" element={<ChatView />} />
+          <Route path="/chat/agent/:agentId/conversation/:conversationId" element={<ChatView />} />
           <Route path="/chat/:conversationId" element={<ChatView />} />
           <Route path="*" element={<AgentList />} />
         </Routes>

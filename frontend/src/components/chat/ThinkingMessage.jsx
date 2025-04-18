@@ -1,25 +1,84 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { Box, Avatar, Paper, Typography, IconButton, Collapse } from '@mui/material';
+import LightbulbIcon from '@mui/icons-material/Lightbulb';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 
 const ThinkingMessage = ({ message }) => {
+  const [expanded, setExpanded] = useState(false);
+
+  const toggleExpanded = () => {
+    setExpanded(prev => !prev);
+  };
+
+  // Ensure content is a string and not undefined
+  const safeContent = message.content || '';
+  
   return (
-    <div className="flex p-4 bg-gray-100 rounded-lg mb-2 w-full">
-      <div className="flex-shrink-0 mr-4">
-        <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white">
-          AI
-        </div>
-      </div>
-      <div className="w-full bg-yellow-50 rounded-lg border-l-4 border-yellow-400 p-3">
-        <div className="flex items-center mb-2 text-yellow-800">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-            <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z" />
-          </svg>
-          <span className="font-semibold">Thinking...</span>
-        </div>
-        <div className="text-gray-700 font-mono text-xs whitespace-normal break-normal max-w-none">
-          {message.content}
-        </div>
-      </div>
-    </div>
+    <Box sx={{ 
+      display: 'flex', 
+      p: 2, 
+      bgcolor: 'grey.100', 
+      borderRadius: 2, 
+      mb: 1, 
+      width: '100%' 
+    }}>
+      <Avatar 
+        sx={{ 
+          width: 32, 
+          height: 32, 
+          bgcolor: 'primary.main', 
+          mr: 2, 
+          fontSize: '0.875rem'
+        }}
+      >
+        AI
+      </Avatar>
+      <Paper 
+        elevation={0} 
+        sx={{ 
+          width: '100%', 
+          bgcolor: 'warning.light', 
+          borderRadius: 2, 
+          borderLeft: '4px solid', 
+          borderColor: 'warning.main', 
+          p: 1.5 
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: expanded ? 1 : 0, color: 'warning.dark' }}>
+          <IconButton 
+            size="small" 
+            onClick={toggleExpanded} 
+            aria-expanded={expanded}
+            aria-label={expanded ? "collapse thinking process" : "expand thinking process"}
+          >
+            {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          </IconButton>
+          <LightbulbIcon sx={{ mr: 1, fontSize: '1.25rem' }} />
+          <Typography variant="subtitle2">Thinking Process</Typography>
+          <Box sx={{ flexGrow: 1 }} />
+        </Box>
+        
+        <Collapse in={expanded}>
+          <Typography 
+            variant="body2" 
+            sx={{ 
+              fontFamily: 'monospace', 
+              whiteSpace: 'pre-wrap', 
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
+              pt: 1,
+              maxHeight: '60vh',
+              overflow: 'auto',
+              borderTop: '1px dashed',
+              borderColor: 'warning.main'
+            }}
+          >
+            {safeContent}
+          </Typography>
+        </Collapse>
+      </Paper>
+    </Box>
   );
 };
 

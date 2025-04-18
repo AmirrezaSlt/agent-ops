@@ -84,7 +84,12 @@ function ChatDialog({ open, onClose, agent }) {
       if (a.sequence !== undefined) return -1;
       if (b.sequence !== undefined) return 1;
       
-      // Otherwise, maintain original order
+      // For messages without sequence, use timestamp as fallback
+      if (a.timestamp && b.timestamp) {
+        return new Date(a.timestamp) - new Date(b.timestamp);
+      }
+      
+      // As a last resort, maintain original order
       return 0;
     });
   }, [messageHistory]);

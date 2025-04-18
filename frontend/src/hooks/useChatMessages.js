@@ -3,14 +3,8 @@ import useAgentStore from '../store/agentStore';
 import useConversationStore from '../store/conversationStore';
 import { processMessage, updateMessagesWithToolOutputs } from '../utils/messageUtils';
 import { sendChatRequest, processStreamingResponse } from '../api/endpoints/chatApi';
-
-/**
- * Generate a unique message ID
- * @returns {string} Unique ID
- */
-const generateMessageId = () => {
-  return Date.now() + '-' + Math.random().toString(36).substring(2, 9);
-};
+import { generateMessageId, formatConversationMessages } from '../utils/chatUtils';
+import { handleAssistantResponse, handleToolMessages } from '../utils/responseHandlers';
 
 /**
  * Custom hook for managing chat messages and interactions
@@ -26,6 +20,7 @@ const useChatMessages = (conversationId = null) => {
   const [abortController, setAbortController] = useState(null);
   const [sequenceCounter, setSequenceCounter] = useState(0);
   const [currentConversationId, setCurrentConversationId] = useState(conversationId);
+  const [loading, setLoading] = useState(conversationId ? true : false);
   
   // Store access
   const storeMessages = useAgentStore(state => state.chatMessages);
@@ -43,17 +38,13 @@ const useChatMessages = (conversationId = null) => {
       if (conversationId) {
         setCurrentConversationId(conversationId);
         clearMessages();
+        setLoading(true);
         
         try {
           const conversation = await fetchConversation(conversationId);
           if (conversation && conversation.messages) {
             // Convert messages to the format expected by the chat UI
-            const formattedMessages = conversation.messages.map(msg => ({
-              type: msg.role,
-              content: msg.content,
-              timestamp: msg.created_at,
-              messageId: generateMessageId()
-            }));
+            const formattedMessages = formatConversationMessages(conversation.messages);
             
             // Add messages to store
             formattedMessages.forEach(msg => addMessage(msg));
@@ -68,6 +59,8 @@ const useChatMessages = (conversationId = null) => {
             timestamp: new Date().toISOString(),
             messageId: generateMessageId()
           });
+        } finally {
+          setLoading(false);
         }
       } else {
         // For new conversations, just clear the messages
@@ -111,11 +104,13 @@ const useChatMessages = (conversationId = null) => {
       type: 'user',
       content: userInput,
       timestamp: new Date().toISOString(),
-      messageId: generateMessageId()
+      messageId: generateMessageId(),
+      sequence: sequenceCounter  // Add sequence number
     };
     
     // Add to store with sequence number
-    addSequencedMessage(userMessage);
+    addMessage(userMessage);
+    setSequenceCounter(prevCounter => prevCounter + 1);
     
     // Clear input and set loading state
     setUserInput('');
@@ -160,212 +155,189 @@ const useChatMessages = (conversationId = null) => {
       
       // Process the streaming response
       await processStreamingResponse(response, {
-        // Handle thinking content
         onThinking: (content, isEnd) => {
-          if (!content.trim()) return;
-          
           if (!messageIds.thinking) {
             // Create a new thinking message
             messageIds.thinking = generateMessageId();
-            
             const thinkingMessage = {
               type: 'assistant',
               content: content,
               isThinking: true,
               timestamp: new Date().toISOString(),
-              messageId: messageIds.thinking
+              messageId: messageIds.thinking,
+              sequence: sequenceCounter
             };
-            
-            addSequencedMessage(thinkingMessage);
+            addMessage(thinkingMessage);
+            setSequenceCounter(prevCounter => prevCounter + 1);
           } else {
             // Update existing thinking message
-            updateMessage(messageIds.thinking, { content });
-          }
-          
-          // If thinking ended, add a separator and reset thinking ID
-          if (isEnd) {
-            addSequencedMessage({
-              type: 'system',
-              content: '---',
-              isSeparator: true,
-              timestamp: new Date().toISOString(),
-              messageId: generateMessageId()
-            });
-            
-            // Reset thinking ID to allow new thinking messages
-            messageIds.thinking = null;
-          }
-        },
-        
-        // Handle assistant messages
-        onAssistantMessage: (content, isComplete) => {
-          if (!content.trim()) return;
-          
-          // Check if this content actually contains a tool response tag
-          if (content.includes('<tool_output>')) {
-            if (!messageIds.toolOutput) {
-              const messageId = generateMessageId();
-              messageIds.toolOutput = messageId;
-              
-              const toolOutputMessage = {
-                type: 'function_result',
-                content: content,
-                timestamp: new Date().toISOString(),
-                messageId
-              };
-              
-              addSequencedMessage(toolOutputMessage);
-            }
-            return;
-          }
-          
-          // For post-tool messages, we want to ALWAYS use the same message ID after a tool
-          // to ensure all assistant content appears in a single message
-          if (messageIds.tool || messageIds.toolOutput) {
-            // If we already have a post-tool assistant message, update it
-            if (messageIds.assistant) {
-              // Update existing assistant message
-              
-              // Simply update with the full accumulated content that was passed in
-              // No concatenation needed since the full accumulated content is in the 'content' parameter
-              updateMessage(messageIds.assistant, { content });
-            } else {
-              // Create a new post-tool assistant message
-              messageIds.assistant = generateMessageId();
-              
-              const assistantMessage = {
-                type: 'assistant',
-                content: content,
-                timestamp: new Date().toISOString(),
-                messageId: messageIds.assistant,
-                isPostTool: true,
-                // Set sequence to ensure it appears after the tool response
-                // Add a small offset to ensure ordering is correct
-                sequence: sequenceCounter + 1000
-              };
-              
-              // Process the message to extract tool calls
-              const processedMessage = processMessage(assistantMessage);
-              addMessage(processedMessage);
-              setSequenceCounter(prevCounter => prevCounter + 1001);
-            }
-          } else {
-            // Standard assistant message handling (not after a tool)
-            if (!messageIds.assistant) {
-              // Create a new assistant message
-              messageIds.assistant = generateMessageId();
-              
-              const assistantMessage = {
-                type: 'assistant',
-                content: content,
-                timestamp: new Date().toISOString(),
-                messageId: messageIds.assistant
-              };
-              
-              // Process the message to extract tool calls
-              const processedMessage = processMessage(assistantMessage);
-              addSequencedMessage(processedMessage);
-            } else {
-              // Update existing assistant message
-              
-              // Simply update with the full accumulated content
-              updateMessage(messageIds.assistant, { content });
-            }
-          }
-        },
-        
-        // Handle tool calls
-        onToolCall: (content) => {
-          if (!content.trim()) return;
-          
-          if (!messageIds.tool) {
-            // Create a new tool message
-            messageIds.tool = generateMessageId();
-            
-            const toolMessage = {
-              type: 'assistant',
-              content: content,
-              hasTool: true,
-              timestamp: new Date().toISOString(),
-              messageId: messageIds.tool
-            };
-            
-            // Process the message to extract tool info
-            const processedMessage = processMessage(toolMessage);
-            addSequencedMessage(processedMessage);
-          }
-        },
-        
-        // Handle tool responses
-        onToolOutput: (content) => {
-          if (!content.trim()) return;
-          
-          if (!messageIds.toolOutput) {
-            // Create a new tool response message
-            messageIds.toolOutput = generateMessageId();
-            
-            const toolOutputMessage = {
-              type: 'function_result',
-              content: content,
-              timestamp: new Date().toISOString(),
-              messageId: messageIds.toolOutput
-            };
-            
-            addSequencedMessage(toolOutputMessage);
-          } else {
-            // Update existing tool response if needed for very large responses
-            const existingMessage = storeMessages.find(m => m.messageId === messageIds.toolOutput);
-            
+            const existingMessage = messageHistory.find(m => m.messageId === messageIds.thinking);
             if (existingMessage) {
-              updateMessage(messageIds.toolOutput, { 
-                content: existingMessage.content + content 
+              updateMessage({
+                ...existingMessage,
+                content: content,
+                isComplete: isEnd
               });
             }
           }
+          
+          // If thinking is complete, prepare for the next message
+          if (isEnd) {
+            // No need to advance the sequence here since the thinking message
+            // has already been given a sequence number
+          }
+        },
+        
+        onAssistantMessage: (content, isComplete) => {
+          // If there's no assistant message yet, create one
+          if (!messageIds.assistant) {
+            messageIds.assistant = generateMessageId();
+            const assistantMessage = {
+              type: 'assistant',
+              content: content,
+              timestamp: new Date().toISOString(),
+              messageId: messageIds.assistant,
+              sequence: sequenceCounter
+            };
+            
+            // Add the message
+            addMessage(assistantMessage);
+            setSequenceCounter(prevCounter => prevCounter + 1);
+          } else {
+            // Update existing assistant message
+            const existingMessage = messageHistory.find(m => m.messageId === messageIds.assistant);
+            if (existingMessage) {
+              updateMessage({
+                ...existingMessage,
+                content: content,
+                isComplete: isComplete
+              });
+            }
+          }
+        },
+        
+        onToolCall: (toolName, args) => {
+          if (!messageIds.tool) {
+            messageIds.tool = generateMessageId();
+            
+            const toolCallMessage = {
+              type: 'function_call',
+              content: JSON.stringify({ tool: toolName, args }),
+              timestamp: new Date().toISOString(),
+              messageId: messageIds.tool,
+              toolName,
+              args,
+              hasTool: true,
+              // Ensure tool call appears after assistant message if there is one
+              sequence: messageIds.assistant 
+                ? sequenceCounter 
+                : sequenceCounter
+            };
+            
+            addMessage(toolCallMessage);
+            setSequenceCounter(prevCounter => prevCounter + 1);
+          }
+        },
+        
+        onToolOutput: (output) => {
+          // Only create a new output message if we haven't seen one yet
+          if (!messageIds.toolOutput && messageIds.tool) {
+            messageIds.toolOutput = generateMessageId();
+            
+            // Calculate sequence to ensure it appears right after the tool call
+            const toolSequence = messageHistory.find(m => m.messageId === messageIds.tool)?.sequence || 0;
+            const toolOutputSequence = toolSequence + 0.5; // Place between tool call and next message
+            
+            const toolOutputMessage = {
+              type: 'function_result',
+              content: output,
+              timestamp: new Date().toISOString(),
+              messageId: messageIds.toolOutput,
+              isToolOutput: true,
+              sequence: toolOutputSequence,
+              // Link to parent tool call
+              parentToolId: messageIds.tool
+            };
+            
+            addMessage(toolOutputMessage);
+          } else if (messageIds.toolOutput) {
+            // Update existing tool output if we have one
+            const existingMessage = messageHistory.find(m => m.messageId === messageIds.toolOutput);
+            if (existingMessage) {
+              updateMessage({
+                ...existingMessage,
+                content: output
+              });
+            }
+          }
+        },
+        
+        onComplete: () => {
+          // Update conversations list when the chat is complete
+          updateConversationsList();
+          setIsTyping(false);
+          setIsSending(false);
+          setAbortController(null);
+        },
+        
+        onError: (error) => {
+          console.error("Error processing response:", error);
+          
+          // Add error message to chat
+          addMessage({
+            type: 'system',
+            content: `Error: ${error.message}`,
+            isError: true,
+            timestamp: new Date().toISOString(),
+            messageId: generateMessageId(),
+            sequence: sequenceCounter
+          });
+          setSequenceCounter(prevCounter => prevCounter + 1);
+          
+          setIsTyping(false);
+          setIsSending(false);
+          setAbortController(null);
         }
       });
-      
-      setIsTyping(false);
     } catch (error) {
-      if (error.name !== 'AbortError') {
-        console.error('Error sending message:', error);
-        
-        // Add error message to the chat
-        addSequencedMessage({
-          type: 'system',
-          content: `Error: ${error.message || 'Failed to send message. Please try again.'}`,
-          isError: true,
-          timestamp: new Date().toISOString(),
-          messageId: generateMessageId()
-        });
-      }
-    } finally {
-      setIsSending(false);
-      setIsTyping(false);
-      setAbortController(null);
+      console.error("Error sending message:", error);
       
-      // If we have a conversation ID, update the conversation store
-      if (currentConversationId) {
-        fetchConversation(currentConversationId).then(conversation => {
-          if (conversation) {
-            updateConversationsList(conversation);
-          }
-        });
-      }
+      // Add error message to chat
+      addMessage({
+        type: 'system',
+        content: `Error: ${error.message}`,
+        isError: true,
+        timestamp: new Date().toISOString(),
+        messageId: generateMessageId(),
+        sequence: sequenceCounter
+      });
+      setSequenceCounter(prevCounter => prevCounter + 1);
+      
+      setIsTyping(false);
+      setIsSending(false);
+      setAbortController(null);
     }
-  }, [userInput, isSending, messageHistory, currentConversationId, addSequencedMessage, updateMessage, fetchConversation, updateConversationsList]);
+  }, [userInput, isSending, messageHistory, addMessage, updateMessage, currentConversationId, sequenceCounter, setSequenceCounter, updateConversationsList]);
   
   /**
-   * Cancels the current request
+   * Cancels the ongoing request
    */
   const cancelRequest = useCallback(() => {
     if (abortController) {
       abortController.abort();
+      setAbortController(null);
       setIsSending(false);
       setIsTyping(false);
-      setAbortController(null);
+      
+      // Add cancellation message
+      addSequencedMessage({
+        type: 'system',
+        content: 'Request cancelled',
+        timestamp: new Date().toISOString(),
+        messageId: generateMessageId()
+      });
     }
-  }, [abortController]);
+  }, [abortController, addSequencedMessage]);
   
   /**
    * Clear all messages and reset sequence counter
@@ -373,6 +345,8 @@ const useChatMessages = (conversationId = null) => {
   const handleClearMessages = useCallback(() => {
     clearMessages();
     setSequenceCounter(0);
+    setCurrentConversationId(null);
+    setMessageHistory([]);
   }, [clearMessages]);
   
   return {
@@ -384,7 +358,8 @@ const useChatMessages = (conversationId = null) => {
     sendMessage,
     cancelRequest,
     clearMessages: handleClearMessages,
-    conversationId: currentConversationId
+    conversationId: currentConversationId,
+    loading
   };
 };
 

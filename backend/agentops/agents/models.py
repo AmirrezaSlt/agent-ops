@@ -5,6 +5,8 @@ import uuid
 class Agent(models.Model):
     name = models.CharField(max_length=100)
     role = models.CharField(max_length=255)
+    endpoint_url = models.CharField(max_length=255, blank=True, null=True, 
+                                   help_text="URL for the agent's chat completion endpoint")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
